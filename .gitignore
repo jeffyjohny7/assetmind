@@ -10,3 +10,7 @@ wheels/
 .venv
 
 data/
+
+mlflow.db
+mlruns/
+reports/
