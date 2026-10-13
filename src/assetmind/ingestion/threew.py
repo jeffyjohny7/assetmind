@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 
 CORE = ["T-TPT", "P-TPT", "P-ANULAR", "P-PDG"]
+MODEL_SENSORS = ["P-TPT", "T-TPT", "P-ANULAR"]   # P-PDG excluded: usable in only 14% of files
 NEVER_PRESENT = ["T-MON-CKP", "P-MON-SDV-P", "P-JUS-BS", "QBS", "PT-P"]
 TRANSIENT_OFFSET = 100
 
