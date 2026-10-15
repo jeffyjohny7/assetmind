@@ -11,8 +11,8 @@ MIN_BASELINE = 120
 TRANSIENT_CLASSES = [1, 2, 5, 6, 7, 8, 9]
 
 
-def load_windows():
-    w = pd.read_parquet(WINDOWS).sort_values(["instance_id", "window_end"]).reset_index(drop=True)
+def load_windows(path=WINDOWS):
+    w = pd.read_parquet(path).sort_values(["instance_id", "window_end"]).reset_index(drop=True)
     for col in ["phase", "instance_id", "well"]:
         w[col] = w[col].astype(str)
     meta = w.groupby("instance_id").agg(well=("well", "first"), end=("window_end", "max"))
@@ -20,11 +20,11 @@ def load_windows():
     return w, meta
 
 
-def evaluate(w, meta, quantile, k, calibration) -> pd.DataFrame:
+def evaluate(w, meta, quantile, k, calibration, features=("logstd", "change")) -> pd.DataFrame:
     """Leave-one-well-out evaluation with the no-future rule. One row per instance."""
     rows = []
     for well in w["well"].unique():
-        det = TwoTierDetector(MODEL_SENSORS, quantile, k, MIN_BASELINE, calibration).fit(
+        det = TwoTierDetector(MODEL_SENSORS, quantile, k, MIN_BASELINE, calibration, features).fit(
             w[(w["well"] != well) & (w["phase"] == "normal")])
         test = w[w["well"] == well]
         well_meta = meta[meta["well"] == well]
@@ -54,7 +54,8 @@ def summarize(rep: pd.DataFrame) -> dict:
 def log_run(params: dict, metrics: dict):
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("3w-anomaly-lowo")
-    name = f"twotier_{params['calibration']}_q{params['quantile']}_k{params['k']}"
+    feats = params.get("features", "v3")
+    name = f"twotier_{feats}_{params['calibration']}_q{params['quantile']}_k{params['k']}"
     with mlflow.start_run(run_name=name):
         mlflow.log_params({"model": "two_tier_robust_z", "min_baseline": MIN_BASELINE,
                            "sensors": ",".join(MODEL_SENSORS), **params})

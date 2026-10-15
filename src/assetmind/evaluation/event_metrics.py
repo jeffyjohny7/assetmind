@@ -23,6 +23,9 @@ def instance_report(w: pd.DataFrame, alarm_col: str = "alarm", step_minutes: flo
     normal = phase.eq("normal")
 
     has_event = pd.notna(onset)
+    fa_times = t[alarm_starts & normal]
+    fa_before = (((onset - fa_times) / pd.Timedelta(hours=1)).tolist()
+                 if has_event else [])
     return {
         "has_event": has_event,
         "detected": pd.notna(first_alarm) if has_event else np.nan,
@@ -30,6 +33,7 @@ def instance_report(w: pd.DataFrame, alarm_col: str = "alarm", step_minutes: flo
         "lead_time_h": _hours(event_start - first_alarm),
         "false_alarms": int((alarm_starts & normal).sum()),
         "normal_hours": float(normal.sum() * step_minutes / 60),
+        "fa_hours_before_onset": fa_before,
     }
 
 

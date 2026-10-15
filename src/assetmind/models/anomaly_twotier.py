@@ -12,8 +12,10 @@ def robust_stats(X: pd.DataFrame):
 class TwoTierDetector:
     """Per-well baseline when the well has enough earlier normal history, else the global detector."""
 
-    def __init__(self, sensors, quantile=0.995, k=3, min_baseline=120, calibration="out_of_sample"):
-        self.global_ = RobustZDetector(sensors, quantile, k)
+        
+    def __init__(self, sensors, quantile=0.995, k=3, min_baseline=120,
+                 calibration="out_of_sample", features=("logstd", "change")):
+        self.global_ = RobustZDetector(sensors, quantile, k, features)
         self.quantile, self.k, self.min_baseline = quantile, k, min_baseline
         self.calibration = calibration
 

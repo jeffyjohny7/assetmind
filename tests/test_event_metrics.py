@@ -26,6 +26,7 @@ def test_alarm_only_in_normal_is_a_false_alarm_not_a_detection():
     assert r["detected"] is False
     assert r["false_alarms"] == 1
     assert np.isnan(r["lead_time_h"])
+    assert np.isclose(r["fa_hours_before_onset"][0], 8 / 60)   # alarm at minute 2, onset at minute 10
 
 
 def test_normal_file_counts_only_false_alarms():

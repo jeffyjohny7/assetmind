@@ -1,20 +1,24 @@
 import numpy as np
 import pandas as pd
 
+FEATURE_BUILDERS = {
+    "logstd":   lambda w, s: np.log1p(w[f"{s}_std"]),
+    "change":   lambda w, s: w[f"{s}_change"],
+    "lvl1h":    lambda w, s: w[f"{s}_lvl1h"],
+    "logwav1h": lambda w, s: np.log1p(w[f"{s}_wav1h"]),
+}
 
 class RobustZDetector:
     """Per-sensor anomaly scores from movement features (std, change).
     Window score = most abnormal valid sensor feature. Alarm = k consecutive windows above threshold."""
 
-    def __init__(self, sensors, quantile=0.995, k=3):
+    def __init__(self, sensors, quantile=0.995, k=3, features=("logstd", "change")):
         self.sensors, self.quantile, self.k = sensors, quantile, k
+        self.features = tuple(features)
 
     def _features(self, w: pd.DataFrame) -> pd.DataFrame:
-        cols = {}
-        for s in self.sensors:
-            cols[f"{s}_logstd"] = np.log1p(w[f"{s}_std"])   # std is skewed; log tames the long tail
-            cols[f"{s}_change"] = w[f"{s}_change"]
-        return pd.DataFrame(cols, index=w.index)
+        return pd.DataFrame({f"{s}_{f}": FEATURE_BUILDERS[f](w, s)
+                             for s in self.sensors for f in self.features}, index=w.index)
 
     def fit(self, normal: pd.DataFrame) -> "RobustZDetector":
         X = self._features(normal)
