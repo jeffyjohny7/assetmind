@@ -21,12 +21,12 @@ def load_windows(path=WINDOWS):
 
 
 def evaluate(w, meta, quantile, k, calibration, features=("logstd", "change"),
-             sensors=MODEL_SENSORS, scale_floor=0.0, scoring="zmax") -> pd.DataFrame:
+             sensors=MODEL_SENSORS, scale_floor=0.0, scoring="zmax", random_state=42) -> pd.DataFrame:
     """Leave-one-well-out evaluation with the no-future rule. One row per instance."""
     rows = []
     for well in w["well"].unique():
         det = TwoTierDetector(sensors, quantile, k, MIN_BASELINE, calibration,
-                              features, scale_floor, scoring).fit(
+                              features, scale_floor, scoring, random_state).fit(
             w[(w["well"] != well) & (w["phase"] == "normal")])
         test = w[w["well"] == well]
         well_meta = meta[meta["well"] == well]
