@@ -21,11 +21,12 @@ def load_windows(path=WINDOWS):
 
 
 def evaluate(w, meta, quantile, k, calibration, features=("logstd", "change"),
-             sensors=MODEL_SENSORS, scale_floor=0.0) -> pd.DataFrame:
+             sensors=MODEL_SENSORS, scale_floor=0.0, scoring="zmax") -> pd.DataFrame:
     """Leave-one-well-out evaluation with the no-future rule. One row per instance."""
     rows = []
     for well in w["well"].unique():
-        det = TwoTierDetector(sensors, quantile, k, MIN_BASELINE, calibration, features, scale_floor).fit(
+        det = TwoTierDetector(sensors, quantile, k, MIN_BASELINE, calibration,
+                              features, scale_floor, scoring).fit(
             w[(w["well"] != well) & (w["phase"] == "normal")])
         test = w[w["well"] == well]
         well_meta = meta[meta["well"] == well]
@@ -57,11 +58,9 @@ def summarize(rep: pd.DataFrame) -> dict:
 def log_run(params: dict, metrics: dict):
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("3w-anomaly-lowo")
-    feats = params.get("features", "v3")
-    sens = params.get("sensors", "core")
-    floor = params.get("scale_floor", 0.0)
-    name = (f"twotier_{sens}_{feats}_f{floor}_{params['calibration']}"
-            f"_q{params['quantile']}_k{params['k']}")
+    name = (f"twotier_{params.get('sensors', 'core')}_{params.get('features', 'v3')}"
+            f"_f{params.get('scale_floor', 0.0)}_{params.get('scoring', 'zmax')}"
+            f"_{params['calibration']}_q{params['quantile']}_k{params['k']}")
     with mlflow.start_run(run_name=name):
         mlflow.log_params({"model": "two_tier_robust_z", "min_baseline": MIN_BASELINE,
                            "sensor_list": ",".join(MODEL_SENSORS), **params})

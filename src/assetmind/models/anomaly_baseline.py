@@ -6,6 +6,7 @@ FEATURE_BUILDERS = {
     "change":   lambda w, s: w[f"{s}_change"],
     "lvl1h":    lambda w, s: w[f"{s}_lvl1h"],
     "logwav1h": lambda w, s: np.log1p(w[f"{s}_wav1h"]),
+    "level":    lambda w, s: w[f"{s}_mean"],   # per-well tier only (levels differ between wells)
 }
 
 class RobustZDetector:
