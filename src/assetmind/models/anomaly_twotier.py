@@ -12,11 +12,20 @@ def robust_stats(X: pd.DataFrame):
     return med, scale
 
 
+def _rank(ref_sorted: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """Position of each value within a sorted reference, as a fraction in (0, 1). NaN stays NaN."""
+    r = np.searchsorted(ref_sorted, values, side="right") / (len(ref_sorted) + 1)
+    return np.where(np.isnan(values), np.nan, r)
+
+
 class TwoTierDetector:
     """Per-well baseline when the well has enough earlier normal history, else the global detector.
     scale_floor: a well's spread per feature is at least scale_floor × a reference spread (0 = no floor).
-    scoring (per-well tier): "zmax" = max raw z; "percentile" = max per-feature percentile;
-             "iforest" = Isolation Forest on the per-feature z vector.
+    scoring (per-well tier):
+      "zmax"       = max raw z over features
+      "percentile" = max per-feature percentile
+      "iforest"    = Isolation Forest on the per-feature z vector
+      "ensemble"   = max of the percentile and iforest scores, each ranked against calibration
     Features in WELL_ONLY are used by the per-well tier only."""
 
     def __init__(self, sensors, quantile=0.995, k=3, min_baseline=120, calibration="out_of_sample",
@@ -44,27 +53,33 @@ class TwoTierDetector:
     def _well_z(X: pd.DataFrame, med, scale) -> pd.DataFrame:
         return ((X - med) / scale).abs()
 
-    def _combine(self, Z: pd.DataFrame) -> pd.Series:
-        """Turn per-feature z-scores into one window score (higher = more anomalous)."""
-        if self.scoring == "zmax":
-            return Z.max(axis=1, skipna=True)
-
-        if self.scoring == "iforest":
-            Z = Z[self.cal_columns_]
-            score = pd.Series(-self.iforest_.score_samples(Z.fillna(0).to_numpy()), index=Z.index)
-            score[Z.isna().all(axis=1)] = np.nan   # nothing valid in this window: no score
-            return score
-
+    # ---------- the scoring methods ----------
+    def _score_percentile(self, Z: pd.DataFrame) -> pd.Series:
         cols = {}
         for c in Z.columns:
             ref = self.cal_sorted_.get(c)
             v = Z[c].to_numpy(dtype=float)
-            if ref is None or len(ref) == 0:
-                cols[c] = np.full(len(v), np.nan)
-                continue
-            p = np.searchsorted(ref, v, side="right") / (len(ref) + 1)
-            cols[c] = np.where(np.isnan(v), np.nan, p)
+            cols[c] = np.full(len(v), np.nan) if ref is None or len(ref) == 0 else _rank(ref, v)
         return pd.DataFrame(cols, index=Z.index).max(axis=1, skipna=True)
+
+    def _score_iforest(self, Z: pd.DataFrame) -> pd.Series:
+        Z = Z[self.cal_columns_]
+        score = pd.Series(-self.iforest_.score_samples(Z.fillna(0).to_numpy()), index=Z.index)
+        score[Z.isna().all(axis=1)] = np.nan   # nothing valid in this window: no score
+        return score
+
+    def _combine(self, Z: pd.DataFrame) -> pd.Series:
+        """Turn per-feature z-scores into one window score (higher = more anomalous)."""
+        if self.scoring == "zmax":
+            return Z.max(axis=1, skipna=True)
+        if self.scoring == "percentile":
+            return self._score_percentile(Z)
+        if self.scoring == "iforest":
+            return self._score_iforest(Z)
+        # ensemble: rank each method's score against its own calibration distribution, take the max
+        r_pct = _rank(self.ens_ref_["percentile"], self._score_percentile(Z).to_numpy(dtype=float))
+        r_if = _rank(self.ens_ref_["iforest"], self._score_iforest(Z).to_numpy(dtype=float))
+        return pd.Series(np.fmax(r_pct, r_if), index=Z.index)
 
     # ---------- calibration ----------
     def _cal_in_sample(self, g):
@@ -104,11 +119,16 @@ class TwoTierDetector:
 
         Z = pd.concat(parts)
         self.cal_columns_ = list(Z.columns)
-        if self.scoring == "percentile":
+        if self.scoring in ("percentile", "ensemble"):
             self.cal_sorted_ = {c: np.sort(Z[c].dropna().to_numpy()) for c in Z.columns}
-        if self.scoring == "iforest":
+        if self.scoring in ("iforest", "ensemble"):
             self.iforest_ = IsolationForest(n_estimators=200, random_state=self.random_state).fit(
                 Z.fillna(0).to_numpy())
+        if self.scoring == "ensemble":
+            self.ens_ref_ = {
+                "percentile": np.sort(self._score_percentile(Z).dropna().to_numpy()),
+                "iforest": np.sort(self._score_iforest(Z).dropna().to_numpy()),
+            }
         self.well_threshold_ = float(np.nanquantile(self._combine(Z), self.quantile))
         return self
 

@@ -90,3 +90,18 @@ def test_iforest_scoring_flags_a_clear_anomaly_but_not_normal():
     calm = _windows("C", "C_2", "2020-08-01")               # ordinary operation for this well
     alarm_calm, _ = det.alarms_instance(calm, hist)
     assert alarm_calm.mean() < 0.1
+
+def test_ensemble_is_calibrated_and_flags_a_clear_anomaly():
+    train = pd.concat([_windows(wl, f"{wl}_{i}", f"2020-0{i+1}-01") for wl in ["A", "B"] for i in range(3)])
+    det = TwoTierDetector(["P"], min_baseline=120, scale_floor=0.1, scoring="ensemble").fit(train)
+    assert 0 < det.well_threshold_ < 1        # ensemble scores are ranks, so the threshold is too
+
+    hist = _windows("C", "C_0", "2020-06-01")
+    odd = _windows("C", "C_1", "2020-07-01")
+    odd["P_std"] = 300.0 + RNG.normal(0, 5, len(odd))
+    alarm_odd, tier = det.alarms_instance(odd, hist)
+    assert tier == "well" and alarm_odd.mean() > 0.9
+
+    calm = _windows("C", "C_2", "2020-08-01")
+    alarm_calm, _ = det.alarms_instance(calm, hist)
+    assert alarm_calm.mean() < 0.1
