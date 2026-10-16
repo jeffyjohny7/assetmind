@@ -20,11 +20,12 @@ def load_windows(path=WINDOWS):
     return w, meta
 
 
-def evaluate(w, meta, quantile, k, calibration, features=("logstd", "change")) -> pd.DataFrame:
+def evaluate(w, meta, quantile, k, calibration, features=("logstd", "change"),
+             sensors=MODEL_SENSORS, scale_floor=0.0) -> pd.DataFrame:
     """Leave-one-well-out evaluation with the no-future rule. One row per instance."""
     rows = []
     for well in w["well"].unique():
-        det = TwoTierDetector(MODEL_SENSORS, quantile, k, MIN_BASELINE, calibration, features).fit(
+        det = TwoTierDetector(sensors, quantile, k, MIN_BASELINE, calibration, features, scale_floor).fit(
             w[(w["well"] != well) & (w["phase"] == "normal")])
         test = w[w["well"] == well]
         well_meta = meta[meta["well"] == well]
@@ -47,6 +48,8 @@ def summarize(rep: pd.DataFrame) -> dict:
         "false_alarms_per_day": false_alarms_per_day(rep),
         "fa_day_well": false_alarms_per_day(rep[rep["tier"] == "well"]),
         "fa_day_global": false_alarms_per_day(rep[rep["tier"] == "global"]),
+        "fa_day_normal_files": false_alarms_per_day(rep[rep["event_class"] == 0]),
+        "fa_day_event_files": false_alarms_per_day(rep[rep["event_class"] != 0]),
         **{f"warn_ge_{h}h": v for h, v in curve.items()},
     }
 
@@ -55,10 +58,13 @@ def log_run(params: dict, metrics: dict):
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("3w-anomaly-lowo")
     feats = params.get("features", "v3")
-    name = f"twotier_{feats}_{params['calibration']}_q{params['quantile']}_k{params['k']}"
+    sens = params.get("sensors", "core")
+    floor = params.get("scale_floor", 0.0)
+    name = (f"twotier_{sens}_{feats}_f{floor}_{params['calibration']}"
+            f"_q{params['quantile']}_k{params['k']}")
     with mlflow.start_run(run_name=name):
         mlflow.log_params({"model": "two_tier_robust_z", "min_baseline": MIN_BASELINE,
-                           "sensors": ",".join(MODEL_SENSORS), **params})
+                           "sensor_list": ",".join(MODEL_SENSORS), **params})
         mlflow.log_metrics(metrics)
 
 

@@ -4,6 +4,7 @@ import pandas as pd
 
 CORE = ["T-TPT", "P-TPT", "P-ANULAR", "P-PDG"]
 MODEL_SENSORS = ["P-TPT", "T-TPT", "P-ANULAR"]   # P-PDG excluded: usable in only 14% of files
+MODEL_SENSORS_EXT = MODEL_SENSORS + ["P-MON-CKP"]   # extended: upstream of the production choke
 NEVER_PRESENT = ["T-MON-CKP", "P-MON-SDV-P", "P-JUS-BS", "QBS", "PT-P"]
 TRANSIENT_OFFSET = 100
 
