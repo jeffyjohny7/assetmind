@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import IsolationForest
 from assetmind.models.anomaly_baseline import RobustZDetector, FEATURE_BUILDERS
 
 WELL_ONLY = {"level"}   # features that only make sense against a well's own history
@@ -14,17 +15,19 @@ def robust_stats(X: pd.DataFrame):
 class TwoTierDetector:
     """Per-well baseline when the well has enough earlier normal history, else the global detector.
     scale_floor: a well's spread per feature is at least scale_floor × a reference spread (0 = no floor).
-    scoring: "zmax" = max raw z over features; "percentile" = max per-feature percentile.
+    scoring (per-well tier): "zmax" = max raw z; "percentile" = max per-feature percentile;
+             "iforest" = Isolation Forest on the per-feature z vector.
     Features in WELL_ONLY are used by the per-well tier only."""
 
     def __init__(self, sensors, quantile=0.995, k=3, min_baseline=120, calibration="out_of_sample",
-                 features=("logstd", "change"), scale_floor=0.0, scoring="zmax"):
+                 features=("logstd", "change"), scale_floor=0.0, scoring="zmax", random_state=42):
         self.sensors = sensors
         self.well_features = tuple(features)
         global_features = tuple(f for f in features if f not in WELL_ONLY)
         self.global_ = RobustZDetector(sensors, quantile, k, global_features)
         self.quantile, self.k, self.min_baseline = quantile, k, min_baseline
         self.calibration, self.scale_floor, self.scoring = calibration, scale_floor, scoring
+        self.random_state = random_state
 
     # ---------- per-well features and statistics ----------
     def _well_X(self, w: pd.DataFrame) -> pd.DataFrame:
@@ -42,9 +45,16 @@ class TwoTierDetector:
         return ((X - med) / scale).abs()
 
     def _combine(self, Z: pd.DataFrame) -> pd.Series:
-        """Turn per-feature z-scores into one window score."""
+        """Turn per-feature z-scores into one window score (higher = more anomalous)."""
         if self.scoring == "zmax":
             return Z.max(axis=1, skipna=True)
+
+        if self.scoring == "iforest":
+            Z = Z[self.cal_columns_]
+            score = pd.Series(-self.iforest_.score_samples(Z.fillna(0).to_numpy()), index=Z.index)
+            score[Z.isna().all(axis=1)] = np.nan   # nothing valid in this window: no score
+            return score
+
         cols = {}
         for c in Z.columns:
             ref = self.cal_sorted_.get(c)
@@ -93,8 +103,12 @@ class TwoTierDetector:
             parts = [self._cal_in_sample(g) for g in wells]
 
         Z = pd.concat(parts)
+        self.cal_columns_ = list(Z.columns)
         if self.scoring == "percentile":
             self.cal_sorted_ = {c: np.sort(Z[c].dropna().to_numpy()) for c in Z.columns}
+        if self.scoring == "iforest":
+            self.iforest_ = IsolationForest(n_estimators=200, random_state=self.random_state).fit(
+                Z.fillna(0).to_numpy())
         self.well_threshold_ = float(np.nanquantile(self._combine(Z), self.quantile))
         return self
 
