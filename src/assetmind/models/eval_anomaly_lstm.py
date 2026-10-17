@@ -1,7 +1,8 @@
+import os
+import pickle
 from pathlib import Path
 import numpy as np
 import pandas as pd
-import pickle
 from assetmind.ingestion.threew import MODEL_SENSORS_EXT
 from assetmind.models.anomaly_twotier import TwoTierDetector
 from assetmind.models.anomaly_lstm import to_input, make_sequences, train_lstm, seq_errors, window_scores
@@ -13,12 +14,15 @@ FEATURES = ("logstd", "change", "lvl1h", "logwav1h")
 SCALE_FLOOR = 0.1
 QUANTILES = [0.99, 0.995, 0.999, 0.9995, 0.9999]
 K = 5
-NAME = "v9_ext_lstm"
-SEED = 42
 CAL_SHARE = 0.3   # share of training wells held out to set the threshold
+SEEDS = [int(s) for s in os.environ.get("LSTM_SEEDS", "42").split(",")]
 
 
-def score_fold(w, meta, well):
+def run_name(seed: int) -> str:
+    return "v9_ext_lstm" if seed == 42 else f"v9_ext_lstm_s{seed}"
+
+
+def score_fold(w, meta, well, seed):
     """Train on all wells except `well`; return per-window scores for `well` plus threshold references."""
     train_normal = w[(w["well"] != well) & (w["phase"] == "normal")]
     det = TwoTierDetector(MODEL_SENSORS_EXT, 0.995, K, MIN_BASELINE, "out_of_sample",
@@ -39,10 +43,10 @@ def score_fold(w, meta, well):
 
     # 70% of training wells train the LSTM; 30% (unseen by it) set the threshold
     names = list(cal)
-    np.random.default_rng(SEED).shuffle(names)
+    np.random.default_rng(seed).shuffle(names)
     n_ref = max(1, int(len(names) * CAL_SHARE))
     ref_names, fit_names = names[:n_ref], names[n_ref:]
-    model = train_lstm(np.concatenate([s for n in fit_names for s in sequences(cal[n])]), seed=SEED)
+    model = train_lstm(np.concatenate([s for n in fit_names for s in sequences(cal[n])]), seed=seed)
     ref_err = np.sort(np.concatenate([seq_errors(model, s) for n in ref_names for s in sequences(cal[n])]))
     global_ref = np.sort(det.global_.score(train_normal).dropna().to_numpy())
 
@@ -83,37 +87,43 @@ def apply_threshold(folds, q, k) -> pd.DataFrame:
     return pd.DataFrame(reports)
 
 
-if __name__ == "__main__":
-    w, meta = load_windows(WINDOWS)
-    cache = REPORTS / f"{NAME}_fold_scores.pkl"
+def run_seed(w, meta, seed) -> pd.DataFrame:
+    name = run_name(seed)
+    cache = REPORTS / f"{name}_fold_scores.pkl"
     if cache.exists():
         with open(cache, "rb") as f:
             folds = pickle.load(f)
-        print(f"Loaded cached fold scores from {cache}")
+        print(f"[seed {seed}] loaded cached fold scores")
     else:
         wells = w["well"].unique()
         folds = []
         for i, well in enumerate(wells, 1):
-            folds.append(score_fold(w, meta, well))
-            print(f"{i}/{len(wells)} wells scored")
+            folds.append(score_fold(w, meta, well, seed))
+            print(f"[seed {seed}] {i}/{len(wells)} wells scored")
         with open(cache, "wb") as f:
             pickle.dump(folds, f)
 
     results = []
     for q in QUANTILES:
         rep = apply_threshold(folds, q, K)
-        rep.to_parquet(REPORTS / f"3w_lowo_{NAME}_q{q}_k{K}.parquet", index=False)
+        rep.to_parquet(REPORTS / f"3w_lowo_{name}_q{q}_k{K}.parquet", index=False)
         metrics = summarize(rep)
-        params = {"config": NAME, "sensors": "ext", "sensor_list": ",".join(MODEL_SENSORS_EXT),
-                  "features": "v4", "scale_floor": SCALE_FLOOR, "scoring": "lstm_ae",
+        params = {"config": name, "sensors": "ext", "sensor_list": ",".join(MODEL_SENSORS_EXT),
+                  "features": "v4", "scale_floor": SCALE_FLOOR, "scoring": "lstm_ae", "seed": seed,
                   "quantile": q, "k": K, "calibration": "held_out_wells"}
         log_run(params, metrics)
         results.append({**params, **metrics})
-        print(f"{NAME} q={q}: macro detection {metrics['detection_macro']:.2f}, "
-              f"false alarms/day {metrics['false_alarms_per_day']:.2f}")
+        print(f"[seed {seed}] q={q}: macro detection {metrics['detection_macro']:.3f}, "
+              f"false alarms/day {metrics['false_alarms_per_day']:.3f}")
 
     out = pd.DataFrame(results)
-    out.to_parquet(REPORTS / "3w_sweep_v9.parquet", index=False)
-    cols = ["config", "quantile", "detection_macro", "false_alarms_per_day",
-            "fa_day_well", "fa_day_global", "warn_ge_1h"]
-    print("\n" + out[cols].round(3).assign(quantile=out["quantile"]).to_string(index=False))
+    out.to_parquet(REPORTS / f"3w_sweep_{name}.parquet", index=False)
+    return out
+
+
+if __name__ == "__main__":
+    w, meta = load_windows(WINDOWS)
+    all_results = pd.concat([run_seed(w, meta, seed) for seed in SEEDS], ignore_index=True)
+
+    cols = ["seed", "quantile", "detection_macro", "false_alarms_per_day", "fa_day_well", "warn_ge_1h"]
+    print("\n" + all_results[cols].round(3).assign(quantile=all_results["quantile"]).to_string(index=False))
