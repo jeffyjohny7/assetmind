@@ -85,6 +85,55 @@ Ranges are across random seeds. Settings were selected after seeing leave-one-we
 | v8 | Percentile + forest ensemble | Best sensitive point (0.49 at ~0.31 FA/day), stable across seeds |
 | v9 | LSTM autoencoder (30-window sequences) | Curve matches or extends others, but threshold calibration and per-class behavior depend on the seed; excluded from operations |
 
+### Arm B: GenAI (Phase 5)
+
+#### Time-series foundation model on 3W (Chronos-2, zero-shot)
+
+Amazon Chronos-2 (120M parameters) forecasts each sensor 5 minutes ahead from 2 hours of history; the anomaly score is the forecast surprise (|actual − median| ÷ 10–90% band width), fed through the same per-well, no-future scoreboard as Arm A. Computed once on a free Colab T4 (~1 h).
+
+| Detector | Macro detection | False alarms per well per day |
+|---|---|---|
+| Arm A, v4 (q = 0.995) | 0.348 | 0.072 |
+| Chronos-2 only (q = 0.99) | 0.340 | 1.617 |
+| Arm A + Chronos-2 feature (q = 0.999) | 0.393 | 0.457 |
+
+- Zero-shot Chronos-2 needs ~20× more false alarms to match Arm A, and adding it to Arm A's features makes the curve worse: forecast surprise flags planned operator actions (unpredictable ≠ faulty), and overlapping forecasts make scores autocorrelated, defeating the persistence filter.
+- It is complementary on **long, slow events**: it uniquely catches 3 of 4 BSW increases and 5 scaling events that Arm A misses. It cannot score files shorter than its 2-hour context (DHSV closures, flow instability).
+- **Verdict:** Arm A wins on this task. Future work: shorter context, multivariate forecasting with covariates.
+
+#### Small language model on pipeline incident text (PHMSA)
+
+6,021 real incident narratives from US hazardous-liquid pipelines (see [`docs/phmsa_data_card.md`](docs/phmsa_data_card.md)), split by year: train 2010–2021, validation 2022–2023, test 2024–2026.
+
+**Main task: classify the cause (7 categories), test set**
+
+| Model | Macro-F1 | Accuracy | Inference cost |
+|---|---|---|---|
+| Dummy | 0.092 | 0.476 | – |
+| Qwen3-4B-Instruct, zero-shot | 0.632 | 0.705 | GPU |
+| TF-IDF + logistic regression | 0.730 | 0.829 | CPU, near-instant |
+| **Qwen3-4B, QLoRA fine-tuned (Unsloth)** | **0.841** | **0.881** | 0.58 s/narrative (T4) |
+
+- Fine-tuning beats TF-IDF: McNemar p = 0.00027 (75 vs 36 disagreements won); bootstrap 95% interval for the macro-F1 gain +0.059 to +0.171.
+- Zero-shot errors followed PHMSA labeling conventions (blaming workers near failing equipment, repair excavations read as excavation damage, weather filed elsewhere) and ignorance of class frequencies. Fine-tuning fixed them (e.g. incorrect-operation precision 0.48 → 0.86 on validation).
+- One prompt revision with hand-written conventions made zero-shot **worse** (0.594 → 0.550 on validation): fixing one confusion moved errors elsewhere.
+
+**Side task: detect reports whose cause is still undetermined (33 positives in test)**
+
+| Model | Precision | Recall | F1 |
+|---|---|---|---|
+| Keyword rule | 0.148 | 0.606 | 0.238 |
+| TF-IDF + logistic regression | 0.000 | 0.000 | 0.000 |
+| **Qwen3-4B, zero-shot** | 0.344 | **0.939** | **0.504** |
+| Qwen3-4B, fine-tuned for causes | 0.000 | 0.000 | 0.000 |
+
+- With only 17 training positives, supervised models fail; zero-shot reading wins.
+- **Catastrophic forgetting:** the cause-tuned model never answers "undetermined" (trained only on narratives with a definite cause). Because LoRA adapters are separable, the design routes cause classification to base + adapter and pending detection to the base model alone.
+
+**Text verdict:** with plentiful labels, a fine-tuned SLM combines language understanding with learned conventions and beats TF-IDF; with scarce labels, the zero-shot SLM wins; zero-shot alone loses to supervised TF-IDF on the main task.
+
+**Data discoveries that shaped the evaluation:** a reporting lag (recent incidents are often still "under investigation"), supplemental conclusions appended to old narratives, and keywords such as "excavated" that appear in every cause.
+
 ### Lessons that shaped the results
 
 - **Inspect data before trusting it.** Sensors present in 71% of files were jointly usable in 11%; a downhole gauge read exactly zero for years; "normal" files appear to be curated calm periods.
@@ -128,12 +177,18 @@ uv sync
 
 **C-MAPSS:** download `CMAPSSData.zip` (NASA data portal or Kaggle) and extract the `.txt` files into `data/raw/cmapss/`.
 
-**3W:** clone the dataset next to this project (it is large; `--depth 1` fetches only the latest version):
+**PHMSA:** download "Hazardous Liquid Accident Data – January 2010 to present (ZIP)" from the PHMSA page and extract it into `data/raw/phmsa/`.
+
+**GPU steps (Colab):** Chronos-2 scoring and the Qwen3-4B zero-shot and QLoRA runs use a free Colab T4; the notebooks are in `notebooks/colab/`.
+
+**3W:** clone the dataset next to this project (it is large; `--depth 1` fetches only the latest version): 
+
 
 ```bash
 cd ..
 git clone --depth 1 https://github.com/petrobras/3W.git
 ```
+
 
 ## Running
 
